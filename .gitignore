@@ -1,0 +1,13 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Go
+bin/
+dist/
+*.exe
+*.out
+*.test
+
+
+

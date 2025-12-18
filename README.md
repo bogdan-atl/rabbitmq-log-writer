@@ -1,46 +1,46 @@
 # rabbit-log-writer (Go)
 
-一个简单的 UDP 日志收集器：监听 UDP（默认 `:516`），把收到的每条消息加上时间戳后写入 RabbitMQ 队列（默认 `mikrotik`）。
+Простой UDP-логгер: слушает UDP (по умолчанию `:516`), добавляет временную метку к каждому полученному сообщению и записывает его в очередь RabbitMQ (по умолчанию `mikrotik`).
 
-## 环境变量
+## Переменные окружения
 
-- **UDP_ADDR**: UDP 监听地址，默认 `:516`
-- **UDP_READ_BUFFER**: 每次读取最大字节数，默认 `1024`
-- **HTTP_ADDR**: HTTP 监听地址（健康检查/指标），默认 `:9793`
-- **BUFFER_SIZE**: 内存缓冲队列大小（UDP→Rabbit），默认 `1000`
-- **QUEUE_NAME**: RabbitMQ 队列名，默认 `mikrotik`
-- **PUBLISH_RETRY_INTERVAL**: 连接/发布失败后的重试间隔，默认 `5s`（也支持只写数字秒，比如 `5`）
+- **UDP_ADDR**: UDP адрес для прослушивания, по умолчанию `:516`
+- **UDP_READ_BUFFER**: Максимальный размер буфера для чтения, по умолчанию `1024` байт
+- **HTTP_ADDR**: HTTP адрес для прослушивания (health check/метрики), по умолчанию `:9793`
+- **BUFFER_SIZE**: Размер буфера в памяти (UDP→Rabbit), по умолчанию `1000`
+- **QUEUE_NAME**: Имя очереди RabbitMQ, по умолчанию `mikrotik`
+- **PUBLISH_RETRY_INTERVAL**: Интервал повтора при ошибках подключения/публикации, по умолчанию `5s` (также поддерживается просто число секунд, например `5`)
 
-本地缓存（spool，用于 Rabbit 断线缓存并恢复后补发）：
+Локальный кэш (spool, для буферизации при отключении Rabbit и последующей отправки):
 
-- **SPOOL_DIR**: spool 目录，默认 `/tmp/udp-logger-spool`
-- **SPOOL_MAX_BYTES**: spool 最大占用字节数（0 表示不限制），默认 `1073741824`（1GiB）
-- **SPOOL_SEGMENT_BYTES**: 单个 segment 文件上限，默认 `16777216`（16MiB）
-- **SPOOL_FSYNC**: `true` 时每条消息落盘 `fsync`（更可靠但更慢），默认 `false`
-- **SPOOL_LOG_INTERVAL**: 定时打印 spool 缓存状态（0 关闭），默认 `30s`
+- **SPOOL_DIR**: Директория spool, по умолчанию `/tmp/udp-logger-spool`
+- **SPOOL_MAX_BYTES**: Максимальный размер spool в байтах (0 = без ограничений), по умолчанию `1073741824` (1GiB)
+- **SPOOL_SEGMENT_BYTES**: Максимальный размер одного segment-файла, по умолчанию `16777216` (16MiB)
+- **SPOOL_FSYNC**: `true` для `fsync` каждой записи на диск (надежнее, но медленнее), по умолчанию `false`
+- **SPOOL_LOG_INTERVAL**: Интервал логирования состояния spool (0 = отключено), по умолчанию `30s`
 
-RabbitMQ：
+RabbitMQ:
 
-- **RABBITMQ_HOST**: 默认 `localhost`
-- **RABBITMQ_PORT**: 默认 `5672`
-- **RABBITMQ_USER**: 默认 `guest`
-- **RABBITMQ_PASSWORD**: 默认 `guest`
-- **RABBITMQ_VHOST**: 默认 `/`
+- **RABBITMQ_HOST**: по умолчанию `localhost`
+- **RABBITMQ_PORT**: по умолчанию `5672`
+- **RABBITMQ_USER**: по умолчанию `guest`
+- **RABBITMQ_PASSWORD**: по умолчанию `guest`
+- **RABBITMQ_VHOST**: по умолчанию `/`
 
-TLS（可选）：
+TLS (опционально):
 
-- **RABBITMQ_TLS**: `true/false`；未设置时会在 `RABBITMQ_PORT=5671` 自动开启
-- **CERTS**: 证书目录（可选），会自动拼出：
+- **RABBITMQ_TLS**: `true/false`; если не установлено, автоматически включается при `RABBITMQ_PORT=5671`
+- **CERTS**: Директория с сертификатами (опционально), автоматически формируются пути:
   - `${CERTS}/ca.pem`
   - `${CERTS}/tls.crt`
   - `${CERTS}/tls.key`
-- **RABBITMQ_CA_FILE / RABBITMQ_CERT_FILE / RABBITMQ_KEY_FILE**: 显式指定证书路径
-- **RABBITMQ_TLS_SERVER_NAME**: 可选
-- **RABBITMQ_TLS_INSECURE_SKIP_VERIFY**: `true` 时跳过证书校验（不推荐）
+- **RABBITMQ_CA_FILE / RABBITMQ_CERT_FILE / RABBITMQ_KEY_FILE**: Явное указание путей к сертификатам
+- **RABBITMQ_TLS_SERVER_NAME**: Опционально
+- **RABBITMQ_TLS_INSECURE_SKIP_VERIFY**: `true` для пропуска проверки сертификата (не рекомендуется)
 
-## Docker 构建
+## Сборка Docker
 
-在仓库根目录执行：
+В корне репозитория выполните:
 
 ```bash
 docker build -t udp-logger:go .
@@ -48,11 +48,56 @@ docker build -t udp-logger:go .
 
 ## Kubernetes
 
-示例清单在 `k8s/`：
+Примеры манифестов в `k8s/`:
 
-- `k8s/deployment.yaml`：包含 `udp-logger` + `x509exporter` 两个 container，并对齐你的 Vault Agent 注解、证书等待逻辑、9793 探针
-- `k8s/udp-socket-vault-agent-configmap.yaml`：Vault Agent 配置（生成 `tls.crt/tls.key/ca.pem`）
-- `k8s/vault-secrets-wait-script-configmap.yaml`：x509 exporter 等待证书脚本
+- `k8s/deployment.yaml`: Содержит два контейнера `udp-logger` + `x509exporter`, настроен под ваши аннотации Vault Agent, логику ожидания сертификатов и пробы на порту 9793
+- `k8s/service.yaml`: Service для доступа к метрикам и UDP порту
+- `k8s/udp-socket-vault-agent-configmap.yaml`: Конфигурация Vault Agent (генерирует `tls.crt/tls.key/ca.pem`)
+- `k8s/vault-secrets-wait-script-configmap.yaml`: Скрипт ожидания сертификатов для x509 exporter
+- `k8s/monitoring/vmagent-inline-scrape-snippet.yaml`: Пример конфигурации VMAgent для сбора метрик
 
+## Мониторинг
 
-# rabbitmq-log-writer
+### Grafana Dashboard
+
+Импортируйте `grafana-dashboard.json` в Grafana для визуализации всех метрик сервиса.
+
+### Алерты
+
+Алерты находятся в `alerts/k8s/udp-logger/`:
+
+- **UdpLoggerRabbitMQDisconnected**: Критический - RabbitMQ отключен более 2 минут
+- **UdpLoggerSpoolQueueBacklog**: Предупреждение - Очередь spool превышает 10,000 сообщений
+- **UdpLoggerSpoolDiskUsageHigh**: Предупреждение - Использование диска spool превышает 768MB
+- **UdpLoggerUdpMessagesDropped**: Критический - UDP сообщения отбрасываются из-за полного буфера
+- **UdpLoggerRabbitPublishErrors**: Предупреждение - Ошибки публикации в RabbitMQ
+- **UdpLoggerPodDown**: Критический - Pod недоступен
+- **UdpLoggerSpoolMessagesDropped**: Критический - Сообщения отбрасываются из spool из-за лимита диска
+- **UdpLoggerPublishRateLag**: Предупреждение - Скорость публикации отстает от скорости приема
+
+## Метрики
+
+Сервис предоставляет следующие Prometheus метрики на порту `:9794`:
+
+- `udp_logger_udp_received_total` - Всего получено UDP сообщений
+- `udp_logger_udp_dropped_total` - Всего отброшено UDP сообщений
+- `udp_logger_rabbit_published_total` - Всего опубликовано в RabbitMQ
+- `udp_logger_rabbit_connect_errors_total` - Ошибки подключения к RabbitMQ
+- `udp_logger_rabbit_publish_errors_total` - Ошибки публикации в RabbitMQ
+- `udp_logger_rabbit_connected` - Статус подключения к RabbitMQ (1 = подключен, 0 = отключен)
+- `udp_logger_spool_queued` - Количество сообщений в очереди spool
+- `udp_logger_spool_bytes` - Размер spool в байтах
+- `udp_logger_spool_dropped_total` - Всего отброшено сообщений из spool
+
+## Локальный запуск
+
+```bash
+cd /home/hhuser/bogdan/bogdan-repo/rabbit-log-writer
+go run ./cmd/udp-logger
+```
+
+Отправка тестового UDP сообщения:
+
+```bash
+echo "test message" | nc -u -w1 127.0.0.1 516
+```
