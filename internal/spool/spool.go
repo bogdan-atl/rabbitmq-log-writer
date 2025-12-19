@@ -277,7 +277,6 @@ func (s *Spool) discoverSegments() error {
 		return err
 	}
 	var segs []int
-	var total int64
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasPrefix(name, "seg-") || !strings.HasSuffix(name, ".dat") {
@@ -289,18 +288,16 @@ func (s *Spool) discoverSegments() error {
 			continue
 		}
 		segs = append(segs, i)
-		if info, err := e.Info(); err == nil {
-			total += info.Size()
-		}
 	}
 	sort.Ints(segs)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.totalBytes = total
+	
 	if len(segs) == 0 {
 		// start at current readSeg
 		s.writeSeg = s.readSeg
+		s.totalBytes = 0
 		return nil
 	}
 	// ensure readSeg is not behind first existing segment
@@ -309,7 +306,33 @@ func (s *Spool) discoverSegments() error {
 		s.readOffset = 0
 	}
 	s.writeSeg = segs[len(segs)-1]
+	
+	// Calculate actual unread bytes (from readOffset to end of each segment)
+	s.totalBytes = s.calculateUnreadBytesLocked()
 	return nil
+}
+
+func (s *Spool) calculateUnreadBytesLocked() int64 {
+	var total int64
+	for seg := s.readSeg; seg <= s.writeSeg; seg++ {
+		path := s.segmentPath(seg)
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			break
+		}
+		fileSize := info.Size()
+		startOffset := int64(0)
+		if seg == s.readSeg {
+			startOffset = s.readOffset
+		}
+		if startOffset < fileSize {
+			total += fileSize - startOffset
+		}
+	}
+	return total
 }
 
 func (s *Spool) ensureWriteFileLocked() error {
@@ -560,6 +583,8 @@ func (s *Spool) recountQueuedLocked() error {
 		total += n
 	}
 	s.queued = total
+	// Also recalculate totalBytes to ensure accuracy (only count unread bytes)
+	s.totalBytes = s.calculateUnreadBytesLocked()
 	return nil
 }
 

@@ -24,6 +24,23 @@ type Config struct {
 	SpoolFsync          bool
 	SpoolLogInterval    time.Duration
 	Rabbit              RabbitConfig
+	Cluster             ClusterConfig
+}
+
+type ClusterConfig struct {
+	Mode      string // "client" or "master" or "" (standalone)
+	MasterAddr string
+	MasterPort int
+	TLS        ClusterTLSConfig
+}
+
+type ClusterTLSConfig struct {
+	Enabled    bool
+	CAFile     string
+	CertFile   string
+	KeyFile    string
+	ServerName string
+	InsecureSkipVerify bool
 }
 
 type RabbitTLSConfig struct {
@@ -94,6 +111,32 @@ func LoadFromEnv() (Config, error) {
 	cfg.Rabbit.TLS.ServerName = getEnv("RABBITMQ_TLS_SERVER_NAME", "")
 	cfg.Rabbit.TLS.InsecureSkipVerify = getEnvBool("RABBITMQ_TLS_INSECURE_SKIP_VERIFY", false)
 
+	// Cluster mode configuration
+	cfg.Cluster.Mode = strings.ToLower(getEnv("CLUSTER_MODE", ""))
+	cfg.Cluster.MasterAddr = getEnv("MASTER_ADDR", "")
+	cfg.Cluster.MasterPort = getEnvInt("MASTER_PORT", 9999)
+	
+	// If MASTER_ADDR is set, automatically enable client mode
+	if cfg.Cluster.Mode == "" && cfg.Cluster.MasterAddr != "" {
+		cfg.Cluster.Mode = "client"
+	}
+	
+	// Cluster TLS (for encryption between client and master)
+	cfg.Cluster.TLS.Enabled = getEnvBool("CLUSTER_TLS", true)
+	// CA file: if CLUSTER_CA_FILE explicitly set, use it; else try default from CERTS dir
+	cfg.Cluster.TLS.CAFile = getEnv("CLUSTER_CA_FILE", def("ca.pem"))
+	// Client cert/key: only use defaults if explicitly set via CERTS, otherwise empty (allows CA-only mode)
+	cfg.Cluster.TLS.CertFile = getEnv("CLUSTER_CERT_FILE", "")
+	if cfg.Cluster.TLS.CertFile == "" && certsDir != "" {
+		cfg.Cluster.TLS.CertFile = def("tls.crt")
+	}
+	cfg.Cluster.TLS.KeyFile = getEnv("CLUSTER_KEY_FILE", "")
+	if cfg.Cluster.TLS.KeyFile == "" && certsDir != "" {
+		cfg.Cluster.TLS.KeyFile = def("tls.key")
+	}
+	cfg.Cluster.TLS.ServerName = getEnv("CLUSTER_TLS_SERVER_NAME", "")
+	cfg.Cluster.TLS.InsecureSkipVerify = getEnvBool("CLUSTER_TLS_INSECURE_SKIP_VERIFY", false)
+
 	if cfg.BufferSize <= 0 {
 		return Config{}, errors.New("BUFFER_SIZE must be > 0")
 	}
@@ -143,6 +186,13 @@ func (r RabbitConfig) TLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 	return buildTLSConfig(r.TLS)
+}
+
+func (c ClusterConfig) TLSConfig() (*tls.Config, error) {
+	if !c.TLS.Enabled {
+		return nil, nil
+	}
+	return buildTLSConfig(c.TLS)
 }
 
 func getEnv(key, def string) string {

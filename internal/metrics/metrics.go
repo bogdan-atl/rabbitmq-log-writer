@@ -22,52 +22,71 @@ type Metrics struct {
 	SpoolQueued prometheus.Gauge
 	SpoolBytes  prometheus.Gauge
 	SpoolDroppedTotal prometheus.Counter
+
+	MasterClientsConnected prometheus.Gauge
 }
 
-func New() *Metrics {
+func New(mode string) *Metrics {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
+	// Common labels for all metrics
+	labels := prometheus.Labels{"mode": mode}
+
 	m := &Metrics{
 		registry: reg,
 		UDPReceivedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "udp_logger_udp_received_total",
-			Help: "Total number of UDP datagrams received.",
+			Name:        "udp_logger_udp_received_total",
+			Help:        "Total number of UDP datagrams received.",
+			ConstLabels: labels,
 		}),
 		UDPDroppedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "udp_logger_udp_dropped_total",
-			Help: "Total number of UDP datagrams dropped due to full buffer.",
+			Name:        "udp_logger_udp_dropped_total",
+			Help:        "Total number of UDP datagrams dropped due to full buffer.",
+			ConstLabels: labels,
 		}),
 		RabbitPublishedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "udp_logger_rabbit_published_total",
-			Help: "Total number of messages successfully published to RabbitMQ.",
+			Name:        "udp_logger_rabbit_published_total",
+			Help:        "Total number of messages successfully published to RabbitMQ.",
+			ConstLabels: labels,
 		}),
 		RabbitConnectErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "udp_logger_rabbit_connect_errors_total",
-			Help: "Total number of RabbitMQ connect/setup errors.",
+			Name:        "udp_logger_rabbit_connect_errors_total",
+			Help:        "Total number of RabbitMQ connect/setup errors.",
+			ConstLabels: labels,
 		}),
 		RabbitPublishErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "udp_logger_rabbit_publish_errors_total",
-			Help: "Total number of RabbitMQ publish errors.",
+			Name:        "udp_logger_rabbit_publish_errors_total",
+			Help:        "Total number of RabbitMQ publish errors.",
+			ConstLabels: labels,
 		}),
 		RabbitConnected: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "udp_logger_rabbit_connected",
-			Help: "1 if connected to RabbitMQ, otherwise 0.",
+			Name:        "udp_logger_rabbit_connected",
+			Help:        "1 if connected to RabbitMQ, otherwise 0.",
+			ConstLabels: labels,
 		}),
 		SpoolQueued: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "udp_logger_spool_queued",
-			Help: "Number of messages currently queued in local spool.",
+			Name:        "udp_logger_spool_queued",
+			Help:        "Number of messages currently queued in local spool.",
+			ConstLabels: labels,
 		}),
 		SpoolBytes: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "udp_logger_spool_bytes",
-			Help: "Total bytes currently used by local spool segment files.",
+			Name:        "udp_logger_spool_bytes",
+			Help:        "Total bytes currently used by local spool segment files.",
+			ConstLabels: labels,
 		}),
 		SpoolDroppedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "udp_logger_spool_dropped_total",
-			Help: "Total number of messages dropped from spool due to max size (drop-oldest).",
+			Name:        "udp_logger_spool_dropped_total",
+			Help:        "Total number of messages dropped from spool due to max size (drop-oldest).",
+			ConstLabels: labels,
+		}),
+		MasterClientsConnected: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name:        "udp_logger_master_clients_connected",
+			Help:        "Number of clients currently connected to master server.",
+			ConstLabels: labels,
 		}),
 	}
 
@@ -81,6 +100,7 @@ func New() *Metrics {
 		m.SpoolQueued,
 		m.SpoolBytes,
 		m.SpoolDroppedTotal,
+		m.MasterClientsConnected,
 	)
 
 	return m
