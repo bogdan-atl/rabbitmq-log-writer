@@ -31,6 +31,7 @@ type ClusterConfig struct {
 	Mode      string // "client" or "master" or "" (standalone)
 	MasterAddr string
 	MasterPort int
+	Protocol   string // "tcp" or "ws" (websocket), default "ws"
 	TLS        ClusterTLSConfig
 }
 
@@ -115,6 +116,7 @@ func LoadFromEnv() (Config, error) {
 	cfg.Cluster.Mode = strings.ToLower(getEnv("CLUSTER_MODE", ""))
 	cfg.Cluster.MasterAddr = getEnv("MASTER_ADDR", "")
 	cfg.Cluster.MasterPort = getEnvInt("MASTER_PORT", 9999)
+	cfg.Cluster.Protocol = strings.ToLower(getEnv("CLUSTER_PROTOCOL", "ws")) // Default to WebSocket
 	
 	// If MASTER_ADDR is set, automatically enable client mode
 	if cfg.Cluster.Mode == "" && cfg.Cluster.MasterAddr != "" {

@@ -71,9 +71,7 @@ TLS (опционально):
 - **RABBITMQ_TLS_SERVER_NAME**: Опционально
 - **RABBITMQ_TLS_INSECURE_SKIP_VERIFY**: `true` для пропуска проверки сертификата (не рекомендуется)
 
-## Сборка
-
-### Docker образ
+## Сборка Docker
 
 В корне репозитория выполните:
 
@@ -81,43 +79,12 @@ TLS (опционально):
 docker build -t udp-logger:go .
 ```
 
-### Бинарный файл для Linux
-
-```bash
-go build -o udp-logger ./cmd/udp-logger
-```
-
-Или для конкретной архитектуры:
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o udp-logger ./cmd/udp-logger
-```
-
 ## Kubernetes
 
 Примеры манифестов в `k8s/`:
 
-### Standalone режим (по умолчанию)
-
-- `k8s/deployment.yaml`: Содержит два контейнера `udp-logger` + `x509exporter`, настроен под ваши аннотации Vault Agent, логику ожидания сертификатов и пробы на порту 9794
+- `k8s/deployment.yaml`: Содержит два контейнера `udp-logger` + `x509exporter`, настроен под ваши аннотации Vault Agent, логику ожидания сертификатов и пробы на порту 9793
 - `k8s/service.yaml`: Service для доступа к метрикам и UDP порту
-
-### Кластерный режим
-
-- `k8s/deployment-master.yaml`: Deployment для Master режима (принимает TCP соединения от клиентов на порту 9999)
-- `k8s/service-master.yaml`: Service для Master с портом 9999 для клиентских соединений
-- `k8s/deployment-client.yaml`: Deployment для Client режима (подключается к Master, не требует порта 9999)
-
-**Важно для Master режима:**
-- В `deployment-master.yaml` добавлен `containerPort: 9999` (Master TCP порт)
-- В `service-master.yaml` добавлен порт `9999` для доступа клиентов к Master
-
-**Важно для Client режима:**
-- Client не требует порта 9999 (только исходящие соединения)
-- `MASTER_ADDR` должен указывать на Service Master (например, `udp-logger-master-service.niva-port-controller`)
-
-### Общие файлы
-
 - `k8s/udp-socket-vault-agent-configmap.yaml`: Конфигурация Vault Agent (генерирует `tls.crt/tls.key/ca.pem`)
 - `k8s/vault-secrets-wait-script-configmap.yaml`: Скрипт ожидания сертификатов для x509 exporter
 - `k8s/monitoring/vmagent-inline-scrape-snippet.yaml`: Пример конфигурации VMAgent для сбора метрик
@@ -253,89 +220,12 @@ go run ./cmd/udp-logger
 - **Безопасность**: Все сообщения между Client и Master зашифрованы через TLS
 - **Отказоустойчивость**: Master может принимать UDP напрямую, если все клиенты недоступны
 
-## Установка на Linux сервере
-
-### Client режим
-
-Для установки Client на Linux сервере см. подробную инструкцию:
-
-📖 **[Установка Client на Linux](scripts/README-client-linux.md)**
-
-Быстрый старт:
-
-```bash
-# 1. Соберите бинарный файл
-go build -o udp-logger ./cmd/udp-logger
-
-# 2. Запустите скрипт установки
-sudo ./scripts/install-client.sh
-
-# 3. Настройте конфигурацию
-sudo nano /etc/udp-logger/client.env
-
-# 4. Скопируйте CA сертификат
-sudo cp ca.pem /etc/udp-logger/certs/
-
-# 5. Запустите сервис
-sudo systemctl start udp-logger-client
-sudo systemctl enable udp-logger-client
-```
-
-## Локальный запуск (для тестирования)
-
-### Standalone режим
+## Локальный запуск
 
 ```bash
 cd /home/hhuser/bogdan/bogdan-repo/rabbit-log-writer
 go run ./cmd/udp-logger
 ```
-
-### Client режим (через go run)
-
-**Вариант 1: Использовать скрипт**
-
-```bash
-./scripts/run-client.sh
-```
-
-**Вариант 2: Вручную с переменными окружения**
-
-```bash
-export CLUSTER_MODE=client
-export MASTER_ADDR=master.example.com
-export MASTER_PORT=9999
-export CLUSTER_TLS=true
-export CLUSTER_CA_FILE=/path/to/ca.pem
-export UDP_ADDR=:516
-export SPOOL_DIR=/tmp/udp-logger-spool
-
-go run ./cmd/udp-logger
-```
-
-**Вариант 3: Одной строкой**
-
-```bash
-CLUSTER_MODE=client MASTER_ADDR=master.example.com CLUSTER_CA_FILE=./certs/ca.pem UDP_ADDR=:516 go run ./cmd/udp-logger
-```
-
-### Master режим (через go run)
-
-```bash
-export CLUSTER_MODE=master
-export MASTER_ADDR=0.0.0.0
-export MASTER_PORT=9999
-export CLUSTER_TLS=true
-export CLUSTER_CA_FILE=/path/to/ca.pem
-export CLUSTER_CERT_FILE=/path/to/tls.crt
-export CLUSTER_KEY_FILE=/path/to/tls.key
-export RABBITMQ_HOST=localhost
-export RABBITMQ_PORT=5672
-export UDP_ADDR=:516
-
-go run ./cmd/udp-logger
-```
-
-### Тестирование
 
 Отправка тестового UDP сообщения:
 

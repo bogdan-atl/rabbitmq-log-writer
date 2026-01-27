@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
-
-	"fmt"
 
 	"rabbit-log-writer/internal/client"
 	"rabbit-log-writer/internal/config"
@@ -107,8 +108,8 @@ func runStandaloneMode(ctx context.Context, cfg config.Config, m *metrics.Metric
 
 // Client mode: UDP -> Spool -> TCP Client -> Master
 func runClientMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
-	log.Printf("running in client mode: udp=%s master=%s:%d",
-		cfg.UDPAddr, cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort)
+	log.Printf("running in client mode: udp=%s master=%s:%d protocol=%s tls=%v",
+		cfg.UDPAddr, cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort, cfg.Cluster.Protocol, cfg.Cluster.TLS.Enabled)
 
 	logCh := make(chan string, cfg.BufferSize)
 
@@ -125,25 +126,72 @@ func runClientMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 		Metrics:      m,
 	}
 
-	tlsCfg, err := cfg.Cluster.TLSConfig()
-	if err != nil {
-		log.Fatalf("cluster TLS config error: %v", err)
-	}
-
-	clientSrv := client.Client{
-		MasterAddr:   cfg.Cluster.MasterAddr,
-		MasterPort:   cfg.Cluster.MasterPort,
-		TLSConfig:    tlsCfg,
-		Spool:        sp,
-		Metrics:      m,
-		RetryInterval: cfg.PublishRetryInterval,
+	protocol := cfg.Cluster.Protocol
+	if protocol == "" {
+		protocol = "ws" // Default to WebSocket
 	}
 
 	errCh := make(chan error, 3)
 	go func() { errCh <- udpSrv.Run(ctx) }()
 	go func() { errCh <- runSpooler(ctx, logCh, sp) }()
-	go func() { errCh <- clientSrv.Run(ctx) }()
 	go func() { _ = runSpoolReporter(ctx, sp, m, cfg.SpoolLogInterval) }()
+
+	if protocol == "ws" || protocol == "websocket" {
+		// Use WebSocket client
+		// Determine if we should use wss:// or ws://
+		// If CLUSTER_TLS is enabled, use wss:// (even if we only have CA file)
+		masterURL := fmt.Sprintf("ws://%s:%d", cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort)
+		var tlsCfg *tls.Config
+		
+		if cfg.Cluster.TLS.Enabled {
+			// TLS is enabled - use wss://
+			masterURL = fmt.Sprintf("wss://%s:%d", cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort)
+			var err error
+			tlsCfg, err = cfg.Cluster.TLSConfig()
+			if err != nil {
+				log.Printf("cluster TLS config error: %v, but will still try wss://", err)
+				// Create minimal TLS config for wss:// connection
+				tlsCfg = &tls.Config{
+					InsecureSkipVerify: cfg.Cluster.TLS.InsecureSkipVerify,
+					ServerName:          cfg.Cluster.TLS.ServerName,
+				}
+				if cfg.Cluster.TLS.CAFile != "" {
+					if caPem, readErr := os.ReadFile(cfg.Cluster.TLS.CAFile); readErr == nil {
+						pool := x509.NewCertPool()
+						if pool.AppendCertsFromPEM(caPem) {
+							tlsCfg.RootCAs = pool
+						}
+					}
+				}
+			}
+			log.Printf("client: using wss:// for WebSocket connection (TLS enabled)")
+		} else {
+			log.Printf("client: using ws:// for WebSocket connection (TLS disabled)")
+		}
+		wsClient := client.WebSocketClient{
+			MasterURL:    masterURL,
+			TLSConfig:    tlsCfg,
+			Spool:        sp,
+			Metrics:      m,
+			RetryInterval: cfg.PublishRetryInterval,
+		}
+		go func() { errCh <- wsClient.Run(ctx) }()
+	} else {
+		// Use TCP client
+		tlsCfg, err := cfg.Cluster.TLSConfig()
+		if err != nil {
+			log.Fatalf("cluster TLS config error: %v", err)
+		}
+		clientSrv := client.Client{
+			MasterAddr:   cfg.Cluster.MasterAddr,
+			MasterPort:   cfg.Cluster.MasterPort,
+			TLSConfig:    tlsCfg,
+			Spool:        sp,
+			Metrics:      m,
+			RetryInterval: cfg.PublishRetryInterval,
+		}
+		go func() { errCh <- clientSrv.Run(ctx) }()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -155,10 +203,14 @@ func runClientMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 	}
 }
 
-// Master mode: TCP Server (from clients) + UDP (fallback) -> RabbitMQ
+// Master mode: WebSocket/TCP Server (from clients) + UDP (fallback) -> RabbitMQ
 func runMasterMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
-	log.Printf("running in master mode: tcp=%s:%d udp=%s rabbit=%s:%d tls=%v",
-		cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort, cfg.UDPAddr, cfg.Rabbit.Host, cfg.Rabbit.Port, cfg.Rabbit.TLS.Enabled)
+	protocol := cfg.Cluster.Protocol
+	if protocol == "" {
+		protocol = "ws" // Default to WebSocket
+	}
+	log.Printf("running in master mode: protocol=%s addr=%s:%d udp=%s rabbit=%s:%d tls=%v",
+		protocol, cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort, cfg.UDPAddr, cfg.Rabbit.Host, cfg.Rabbit.Port, cfg.Rabbit.TLS.Enabled)
 
 	logCh := make(chan string, cfg.BufferSize)
 
@@ -168,21 +220,44 @@ func runMasterMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 	}
 	defer func() { _ = sp.Close() }()
 
-	// TCP server to receive from clients
-	tlsCfg, err := cfg.Cluster.TLSConfig()
-	if err != nil {
-		log.Fatalf("cluster TLS config error: %v", err)
+	var masterSrv interface {
+		Run(context.Context) error
 	}
 
-	masterAddr := cfg.Cluster.MasterAddr
-	if masterAddr == "" {
-		masterAddr = "0.0.0.0"
-	}
-	masterSrv := master.Server{
-		Addr:      fmt.Sprintf("%s:%d", masterAddr, cfg.Cluster.MasterPort),
-		TLSConfig: tlsCfg,
-		Out:       logCh,
-		Metrics:   m,
+	if protocol == "ws" || protocol == "websocket" {
+		// Use WebSocket server
+		masterAddr := cfg.Cluster.MasterAddr
+		if masterAddr == "" {
+			masterAddr = "0.0.0.0"
+		}
+		tlsCfg, err := cfg.Cluster.TLSConfig()
+		if err != nil {
+			log.Fatalf("cluster TLS config error: %v", err)
+		}
+		wsServer := master.WebSocketServer{
+			Addr:      fmt.Sprintf("%s:%d", masterAddr, cfg.Cluster.MasterPort),
+			TLSConfig: tlsCfg,
+			Out:       logCh,
+			Metrics:   m,
+		}
+		masterSrv = wsServer
+	} else {
+		// Use TCP server
+		tlsCfg, err := cfg.Cluster.TLSConfig()
+		if err != nil {
+			log.Fatalf("cluster TLS config error: %v", err)
+		}
+		masterAddr := cfg.Cluster.MasterAddr
+		if masterAddr == "" {
+			masterAddr = "0.0.0.0"
+		}
+		tcpServer := master.Server{
+			Addr:      fmt.Sprintf("%s:%d", masterAddr, cfg.Cluster.MasterPort),
+			TLSConfig: tlsCfg,
+			Out:       logCh,
+			Metrics:   m,
+		}
+		masterSrv = tcpServer
 	}
 
 	// UDP server as fallback (if clients are down)
@@ -261,7 +336,6 @@ func runSpoolReporter(ctx context.Context, s *spool.Spool, m *metrics.Metrics, i
 
 			if interval > 0 {
 				if lastLog.IsZero() || time.Since(lastLog) >= interval {
-					log.Printf("spool buffered messages=%d bytes=%d readSeg=%d writeSeg=%d", st.Queued, st.Bytes, st.ReadSeg, st.WriteSeg)
 					lastLog = time.Now()
 				}
 			}

@@ -34,19 +34,19 @@ func buildTLSConfig(c tlsConfigSource) (*tls.Config, error) {
 		ServerName:         c.GetServerName(),
 	}
 
-	// Client cert (mTLS)
+	// Client cert (mTLS) - used for both client and server
 	if c.GetCertFile() != "" || c.GetKeyFile() != "" {
 		if c.GetCertFile() == "" || c.GetKeyFile() == "" {
 			return nil, fmt.Errorf("both cert and key must be provided")
 		}
 		cert, err := tls.LoadX509KeyPair(c.GetCertFile(), c.GetKeyFile())
 		if err != nil {
-			return nil, fmt.Errorf("load client cert/key: %w", err)
+			return nil, fmt.Errorf("load cert/key: %w", err)
 		}
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
-	// Custom CA
+	// Custom CA - for client verification (RootCAs) or server verification (ClientCAs)
 	if c.GetCAFile() != "" {
 		pem, err := os.ReadFile(c.GetCAFile())
 		if err != nil {
@@ -56,7 +56,11 @@ func buildTLSConfig(c tlsConfigSource) (*tls.Config, error) {
 		if !pool.AppendCertsFromPEM(pem) {
 			return nil, fmt.Errorf("invalid CA pem: %s", c.GetCAFile())
 		}
+		// For client: use RootCAs to verify server
+		// For server: use ClientCAs to verify client (if mTLS is needed)
 		tlsCfg.RootCAs = pool
+		// Also set ClientCAs for server-side client verification (optional)
+		tlsCfg.ClientCAs = pool
 	}
 
 	return tlsCfg, nil
