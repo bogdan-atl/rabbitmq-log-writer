@@ -1,0 +1,42 @@
+[Unit]
+Description=UDP Logger Client - Forwards UDP logs to Master server
+After=network.target
+
+[Service]
+Type=simple
+# User and Group - uncomment if running as non-root user
+# User=udp-logger
+# Group=udp-logger
+
+# Working directory - adjust to your installation path
+WorkingDirectory=/root/rabbit-log-writer
+
+# Executable - use compiled binary (recommended for production)
+ExecStart=/root/rabbit-log-writer/udp-logger
+
+# Option 2: Use go run (for development/testing) - uncomment if needed
+# First find Go path: which go
+# ExecStart=/path/to/go run /root/rabbit-log-writer/cmd/udp-logger
+
+# Environment file - adjust path as needed
+EnvironmentFile=-/root/rabbit-log-writer/scripts/client.env
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=udp-logger-client
+
+# Security settings (commented out if running as root)
+# NoNewPrivileges=true
+# PrivateTmp=true
+# ProtectSystem=strict
+# ProtectHome=true
+# ReadWritePaths=/tmp/udp-logger-spool
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+

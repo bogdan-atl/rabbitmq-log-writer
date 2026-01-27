@@ -336,6 +336,7 @@ func runSpoolReporter(ctx context.Context, s *spool.Spool, m *metrics.Metrics, i
 
 			if interval > 0 {
 				if lastLog.IsZero() || time.Since(lastLog) >= interval {
+					log.Printf("spool buffered messages=%d bytes=%d readSeg=%d writeSeg=%d", st.Queued, st.Bytes, st.ReadSeg, st.WriteSeg)
 					lastLog = time.Now()
 				}
 			}

@@ -131,6 +131,7 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 		maxBatchBytes := 50 * 1024 * 1024 // 50MB max to prevent memory issues
 		
 		// Read messages until spool is empty or we hit size limit
+		// IMPORTANT: We need to ack messages immediately after reading to prevent re-reading
 		for {
 			select {
 			case <-ctx.Done():
@@ -164,6 +165,7 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 			if batchSize+msgSize > maxBatchBytes {
 				// Send current batch first, then continue with this message
 				if len(batch) > 0 {
+					// Don't ack this message yet - we'll read it again in next iteration
 					break
 				}
 				// Single message too large - skip it (shouldn't happen)
@@ -174,14 +176,23 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 				continue
 			}
 
-			batch = append(batch, spoolMessage{msg: msg, ack: ack})
+			// IMPORTANT: Ack immediately after reading to prevent re-reading
+			// The ack function checks if position hasn't changed, so we must call it right away
+			if ack != nil {
+				if err := ack(); err != nil {
+					log.Printf("client: spool ack error: %v", err)
+					// If ack fails, don't add to batch - message will remain in spool
+					continue
+				}
+			}
+
+			// Add to batch (already acked, so we just store the message)
+			batch = append(batch, spoolMessage{msg: msg, ack: nil}) // ack already called
 			batchSize += msgSize
 		}
 
 		// If we have messages, send them all at once
 		if len(batch) > 0 {
-			log.Printf("client: collected %d messages (%d bytes), sending all at once", len(batch), batchSize)
-			
 			// Prepare batch data
 			batchData := make([]string, len(batch))
 			for i, sm := range batch {
@@ -203,24 +214,7 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 				return err
 			}
 			
-			// Successfully sent - ack all messages in batch immediately
-			// Messages are now in master's buffer, so we can remove them from spool
-			ackedCount := 0
-			for i, sm := range batch {
-				if sm.ack != nil {
-					if err := sm.ack(); err != nil {
-						log.Printf("client: spool ack error for message %d: %v", i, err)
-					} else {
-						ackedCount++
-					}
-				}
-			}
-			
-			if ackedCount != len(batch) {
-				log.Printf("client: WARNING: acked %d/%d messages in batch", ackedCount, len(batch))
-			} else {
-				log.Printf("client: successfully sent and acked %d messages", len(batch))
-			}
+			// Messages are already acked when read, no need to log success
 			
 			if c.Metrics != nil {
 				for range batch {
