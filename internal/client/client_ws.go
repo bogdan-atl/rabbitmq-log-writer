@@ -115,7 +115,8 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 	connCtx, cancelConn := context.WithCancel(ctx)
 	defer cancelConn()
 
-	// Main loop: read all available messages from queue and send them at once
+	// Main loop: read one message, send it, then ack.
+	// This preserves "unsent messages stay in queue" semantics.
 	for {
 		select {
 		case <-ctx.Done():
@@ -125,110 +126,39 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 		default:
 		}
 
-		// Collect ALL available messages from queue at once
-		var batch []spoolMessage
-		batchSize := 0
-		maxBatchBytes := 50 * 1024 * 1024 // 50MB max to prevent memory issues
-		
-		// Read messages until queue is empty or we hit size limit
-		// IMPORTANT: We need to ack messages immediately after reading to prevent re-reading
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-connCtx.Done():
+		msg, ack, err := c.Queue.Next(connCtx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
 				return connCtx.Err()
-			default:
 			}
-
-			// Try to read next message with timeout
-			readCtx, cancelRead := context.WithTimeout(connCtx, 100*time.Millisecond)
-			msg, ack, err := c.Queue.Next(readCtx)
-			cancelRead()
-			
-			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					// No more messages available or timeout
-					break
-				}
-				// Other error - wait a bit and retry
-				select {
-				case <-connCtx.Done():
-					return connCtx.Err()
-				case <-time.After(1 * time.Second):
-					continue
-				}
-			}
-
-			msgSize := len(msg)
-			// Check if adding this message would exceed size limit
-			if batchSize+msgSize > maxBatchBytes {
-				// Send current batch first, then continue with this message
-				if len(batch) > 0 {
-					// Don't ack this message yet - we'll read it again in next iteration
-					break
-				}
-				// Single message too large - skip it (shouldn't happen)
-				log.Printf("client: WARNING: message too large (%d bytes), skipping", msgSize)
-				if ack != nil {
-					ack() // Still ack it to remove from queue
-				}
-				continue
-			}
-
-			// IMPORTANT: Ack immediately after reading to prevent re-reading
-			// The ack function checks if position hasn't changed, so we must call it right away
-			if ack != nil {
-				if err := ack(); err != nil {
-					log.Printf("client: queue ack error: %v", err)
-					// If ack fails, don't add to batch - message will remain in queue
-					continue
-				}
-			}
-
-			// Add to batch (already acked, so we just store the message)
-			batch = append(batch, spoolMessage{msg: msg, ack: nil}) // ack already called
-			batchSize += msgSize
-		}
-
-		// If we have messages, send them all at once
-		if len(batch) > 0 {
-			// Prepare batch data
-			batchData := make([]string, len(batch))
-			for i, sm := range batch {
-				batchData[i] = sm.msg
-			}
-			
-			message := map[string]interface{}{
-				"type":     "batch",
-				"count":    len(batch),
-				"messages": batchData,
-			}
-			
-			// Send batch
-			conn.SetWriteDeadline(time.Now().Add(60 * time.Second))
-			if err := conn.WriteJSON(message); err != nil {
-				log.Printf("client: send batch error: %v (batch size: %d)", err, len(batch))
-				// On error, don't ack - messages will remain in queue for retry
-				// Connection will be closed and reconnected
-				return err
-			}
-			
-			// Messages are already acked when read, no need to log success
-			
-			if c.Metrics != nil {
-				for range batch {
-					c.Metrics.RabbitPublishedTotal.Inc()
-				}
-			}
-		} else {
-			// No messages available - wait a bit before checking again
 			select {
 			case <-connCtx.Done():
 				return connCtx.Err()
 			case <-time.After(1 * time.Second):
 				continue
 			}
+		}
+
+		message := map[string]interface{}{
+			"type":     "batch",
+			"count":    1,
+			"messages": []string{msg},
+		}
+
+		conn.SetWriteDeadline(time.Now().Add(60 * time.Second))
+		if err := conn.WriteJSON(message); err != nil {
+			// On write failure message is not acked and will be retried.
+			log.Printf("client: send batch error: %v (batch size: 1)", err)
+			return err
+		}
+
+		if ack != nil {
+			if err := ack(); err != nil {
+				log.Printf("client: queue ack error: %v", err)
+			}
+		}
+		if c.Metrics != nil {
+			c.Metrics.RabbitPublishedTotal.Inc()
 		}
 	}
 }

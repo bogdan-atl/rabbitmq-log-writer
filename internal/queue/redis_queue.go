@@ -38,6 +38,9 @@ func NewRedisQueue(ctx context.Context, addr, password, listKey, ackedKey string
 	if err := c.Ping(ctx).Err(); err != nil {
 		return nil, err
 	}
+	if err := recoverProcessing(ctx, c, listKey, ackedKey); err != nil {
+		return nil, err
+	}
 
 	lLen, err := c.LLen(ctx, listKey).Result()
 	if err != nil {
@@ -54,6 +57,21 @@ func NewRedisQueue(ctx context.Context, addr, password, listKey, ackedKey string
 		ackedKey: ackedKey,
 		queued:   lLen + aLen,
 	}, nil
+}
+
+func recoverProcessing(ctx context.Context, c *redis.Client, listKey, ackedKey string) error {
+	for {
+		msg, err := c.RPopLPush(ctx, ackedKey, listKey).Result()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				return nil
+			}
+			return err
+		}
+		if msg == "" {
+			return nil
+		}
+	}
 }
 
 func (q *RedisQueue) Enqueue(msg string) error {
