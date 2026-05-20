@@ -94,23 +94,6 @@ func (p Publisher) Run(ctx context.Context, s *spool.Spool) error {
 			return err
 		}
 
-		_, err = channel.QueueDeclare(
-			p.QueueName,
-			true,  // durable
-			false, // autoDelete
-			false, // exclusive
-			false, // noWait
-			nil,   // args
-		)
-		if err != nil {
-			_ = channel.Close()
-			_ = c.Close()
-			if p.Metrics != nil {
-				p.Metrics.RabbitConnectErrorsTotal.Inc()
-			}
-			return err
-		}
-
 		conn = c
 		ch = channel
 		connDone = conn.NotifyClose(make(chan *amqp.Error, 1))

@@ -60,6 +60,8 @@ RabbitMQ:
 - **RABBITMQ_PASSWORD**: по умолчанию `guest`
 - **RABBITMQ_VHOST**: по умолчанию `/`
 
+Важно: сервис не создает очередь в RabbitMQ автоматически. Очередь из `QUEUE_NAME` должна быть создана заранее (например, как `quorum`/durable согласно вашей политике RabbitMQ).
+
 TLS (опционально):
 
 - **RABBITMQ_TLS**: `true/false`; если не установлено, автоматически включается при `RABBITMQ_PORT=5671`
