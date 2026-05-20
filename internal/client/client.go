@@ -12,14 +12,14 @@ import (
 	"time"
 
 	"rabbit-log-writer/internal/metrics"
-	"rabbit-log-writer/internal/spool"
+	"rabbit-log-writer/internal/queue"
 )
 
 type Client struct {
 	MasterAddr string
 	MasterPort int
 	TLSConfig  *tls.Config
-	Spool      *spool.Spool
+	Queue      queue.Queue
 	Metrics    *metrics.Metrics
 	RetryInterval time.Duration
 }
@@ -34,8 +34,8 @@ func (c Client) Run(ctx context.Context) error {
 	if c.RetryInterval <= 0 {
 		c.RetryInterval = 5 * time.Second
 	}
-	if c.Spool == nil {
-		return errors.New("client: spool is nil")
+	if c.Queue == nil {
+		return errors.New("client: queue is nil")
 	}
 
 	addr := fmt.Sprintf("%s:%d", c.MasterAddr, c.MasterPort)
@@ -132,11 +132,11 @@ func (c Client) handleConnection(ctx context.Context, conn net.Conn) error {
 	heartbeatTicker := time.NewTicker(heartbeatInterval)
 	defer heartbeatTicker.Stop()
 
-	// Channel for messages from spool
+	// Channel for messages from queue
 	msgCh := make(chan spoolMessage, 100) // Larger buffer for batching
 	errCh := make(chan error, 1)
 
-	// Goroutine to read from spool
+	// Goroutine to read from queue
 	// This goroutine will be cancelled when connection is lost, preventing duplicate sends
 	go func() {
 		defer close(msgCh)
@@ -147,12 +147,12 @@ func (c Client) handleConnection(ctx context.Context, conn net.Conn) error {
 			default:
 			}
 
-			msg, ack, err := c.Spool.Next(connCtx)
+			msg, ack, err := c.Queue.Next(connCtx)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
 				}
-				// spool empty, wait a bit
+				// queue empty, wait a bit
 				select {
 				case <-connCtx.Done():
 					return
@@ -186,8 +186,8 @@ func (c Client) handleConnection(ctx context.Context, conn net.Conn) error {
 			}
 		case sm, ok := <-msgCh:
 			if !ok {
-				// Channel closed, spool goroutine exited
-				return errors.New("client: spool reader exited")
+				// Channel closed, queue goroutine exited
+				return errors.New("client: queue reader exited")
 			}
 			
 			// Collect batch of messages - send ALL available messages at once
@@ -270,13 +270,13 @@ func (c Client) handleConnection(ctx context.Context, conn net.Conn) error {
 				}
 
 				if ackReceived {
-					// Master confirmed receipt - NOW safe to ack all spool entries in batch
+				// Master confirmed receipt - NOW safe to ack all queue entries in batch
 					// This is the ONLY place where we ack - ensures no duplicates
 					ackedCount := 0
 					for i, sm := range batch {
 						if sm.ack != nil {
 							if err := sm.ack(); err != nil {
-								log.Printf("client: spool ack error for message %d in batch: %v", i, err)
+								log.Printf("client: queue ack error for message %d in batch: %v", i, err)
 								// If ack fails, we've already sent the batch, but can't mark it as consumed
 								// This is a problem, but better than duplicating
 							} else {

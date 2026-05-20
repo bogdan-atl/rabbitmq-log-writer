@@ -11,7 +11,7 @@ import (
 
 	"rabbit-log-writer/internal/config"
 	"rabbit-log-writer/internal/metrics"
-	"rabbit-log-writer/internal/spool"
+	"rabbit-log-writer/internal/queue"
 )
 
 type Publisher struct {
@@ -23,9 +23,9 @@ type Publisher struct {
 	Metrics           *metrics.Metrics
 }
 
-func (p Publisher) Run(ctx context.Context, s *spool.Spool) error {
-	if s == nil {
-		return errors.New("rabbit publisher: spool is nil")
+func (p Publisher) Run(ctx context.Context, q queue.Queue) error {
+	if q == nil {
+		return errors.New("rabbit publisher: queue is nil")
 	}
 	if p.QueueName == "" {
 		return errors.New("rabbit publisher: QueueName is empty")
@@ -128,13 +128,13 @@ func (p Publisher) Run(ctx context.Context, s *spool.Spool) error {
 		default:
 		}
 
-		msg, ack, err := s.Next(ctx)
+		msg, ack, err := q.Next(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
-			// keep looping; spool errors are unusual but shouldn't crash the pod forever
-			log.Printf("spool next error: %v", err)
+			// keep looping; queue errors are unusual but shouldn't crash the pod forever
+			log.Printf("queue next error: %v", err)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -177,7 +177,7 @@ func (p Publisher) Run(ctx context.Context, s *spool.Spool) error {
 				}
 				if ack != nil {
 					if err := ack(); err != nil {
-						log.Printf("spool ack error: %v", err)
+						log.Printf("queue ack error: %v", err)
 					}
 				}
 				break

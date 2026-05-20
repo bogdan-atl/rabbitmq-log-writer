@@ -46,11 +46,20 @@
 
 Локальный кэш (spool, для буферизации при отключении Rabbit и последующей отправки):
 
+- **QUEUE_BACKEND**: backend для буфера неотправленных сообщений: `spool` (по умолчанию) или `redis`
 - **SPOOL_DIR**: Директория spool, по умолчанию `/tmp/udp-logger-spool`
 - **SPOOL_MAX_BYTES**: Максимальный размер spool в байтах (0 = без ограничений), по умолчанию `1073741824` (1GiB)
 - **SPOOL_SEGMENT_BYTES**: Максимальный размер одного segment-файла, по умолчанию `16777216` (16MiB)
 - **SPOOL_FSYNC**: `true` для `fsync` каждой записи на диск (надежнее, но медленнее), по умолчанию `false`
 - **SPOOL_LOG_INTERVAL**: Интервал логирования состояния spool (0 = отключено), по умолчанию `30s`
+
+Redis (используется только при `QUEUE_BACKEND=redis`):
+
+- **REDIS_ADDR**: адрес Redis, по умолчанию `localhost:6379`
+- **REDIS_PASSWORD**: пароль Redis, по умолчанию пусто
+- **REDIS_DB**: номер БД Redis, по умолчанию `0`
+- **REDIS_QUEUE_KEY**: ключ списка с неотправленными сообщениями, по умолчанию `udp-logger:queue`
+- **REDIS_PROCESSING_KEY**: ключ списка "в обработке", по умолчанию `udp-logger:queue:processing`
 
 RabbitMQ:
 
@@ -166,6 +175,21 @@ export UDP_ADDR=":516"
 export RABBITMQ_HOST="localhost"
 export RABBITMQ_PORT="5672"
 export QUEUE_NAME="mikrotik"
+export QUEUE_BACKEND="spool"
+go run ./cmd/udp-logger
+```
+
+### Standalone с Redis для неотправленных сообщений
+
+```bash
+export UDP_ADDR=":516"
+export RABBITMQ_HOST="localhost"
+export RABBITMQ_PORT="5672"
+export QUEUE_NAME="mikrotik"
+export QUEUE_BACKEND="redis"
+export REDIS_ADDR="127.0.0.1:6379"
+export REDIS_PASSWORD=""
+export REDIS_DB="0"
 go run ./cmd/udp-logger
 ```
 
@@ -310,6 +334,7 @@ export CLUSTER_TLS=true
 export CLUSTER_CA_FILE=/path/to/ca.pem
 export UDP_ADDR=:516
 export SPOOL_DIR=/tmp/udp-logger-spool
+export QUEUE_BACKEND=spool
 
 go run ./cmd/udp-logger
 ```
@@ -318,6 +343,12 @@ go run ./cmd/udp-logger
 
 ```bash
 CLUSTER_MODE=client MASTER_ADDR=master.example.com CLUSTER_CA_FILE=./certs/ca.pem UDP_ADDR=:516 go run ./cmd/udp-logger
+```
+
+Client с Redis-буфером:
+
+```bash
+CLUSTER_MODE=client MASTER_ADDR=master.example.com CLUSTER_CA_FILE=./certs/ca.pem UDP_ADDR=:516 QUEUE_BACKEND=redis REDIS_ADDR=127.0.0.1:6379 go run ./cmd/udp-logger
 ```
 
 ### Master режим (через go run)

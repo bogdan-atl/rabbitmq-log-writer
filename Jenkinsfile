@@ -10,6 +10,8 @@ pipeline {
         BINARY_NAME  = 'udp-logger'
         SERVICE_NAME = 'udp-logger-client.service'
         TARGET_DIR   = '/root/rabbit-log-writer'
+        REDIS_CONTAINER = 'udp-logger-ci-redis'
+        REDIS_PORT = '6379'
     }
 
     stages {
@@ -28,6 +30,17 @@ pipeline {
                     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ${BINARY_NAME} ./cmd/udp-logger
                 '''
                 sh 'ls -la ${BINARY_NAME}'
+            }
+        }
+
+        stage('Start Redis') {
+            steps {
+                sh '''
+                    docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true
+                    docker run -d --name ${REDIS_CONTAINER} -p ${REDIS_PORT}:6379 redis:7-alpine --save "" --appendonly no
+                    sleep 3
+                    docker exec ${REDIS_CONTAINER} redis-cli ping
+                '''
             }
         }
 
@@ -76,9 +89,11 @@ pipeline {
     post {
         success {
             sh 'echo "udp-logger-client deployed successfully at $(date)" | logger -t jenkins'
+            sh 'docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true'
         }
         failure {
             sh 'echo "udp-logger-client deployment failed at $(date)" | logger -t jenkins'
+            sh 'docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true'
         }
     }
 }

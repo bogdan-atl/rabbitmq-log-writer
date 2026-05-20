@@ -16,6 +16,7 @@ type Config struct {
 	UDPReadBufBytes     int
 	HTTPAddr            string
 	QueueName           string
+	QueueBackend        string
 	BufferSize          int
 	PublishRetryInterval time.Duration
 	SpoolDir            string
@@ -23,8 +24,17 @@ type Config struct {
 	SpoolSegmentBytes   int64
 	SpoolFsync          bool
 	SpoolLogInterval    time.Duration
+	Redis               RedisConfig
 	Rabbit              RabbitConfig
 	Cluster             ClusterConfig
+}
+
+type RedisConfig struct {
+	Addr      string
+	Password  string
+	DB        int
+	QueueKey  string
+	ProcessingKey string
 }
 
 type ClusterConfig struct {
@@ -68,6 +78,7 @@ func LoadFromEnv() (Config, error) {
 	cfg.UDPAddr = getEnv("UDP_ADDR", ":516")
 	cfg.HTTPAddr = getEnv("HTTP_ADDR", ":9793")
 	cfg.QueueName = getEnv("QUEUE_NAME", "mikrotik")
+	cfg.QueueBackend = strings.ToLower(getEnv("QUEUE_BACKEND", "spool"))
 
 	cfg.UDPReadBufBytes = getEnvInt("UDP_READ_BUFFER", 1024)
 	cfg.BufferSize = getEnvInt("BUFFER_SIZE", 1000)
@@ -79,6 +90,12 @@ func LoadFromEnv() (Config, error) {
 	cfg.SpoolSegmentBytes = getEnvInt64("SPOOL_SEGMENT_BYTES", 16*1024*1024) // 16MiB
 	cfg.SpoolFsync = getEnvBool("SPOOL_FSYNC", false)
 	cfg.SpoolLogInterval = getEnvDuration("SPOOL_LOG_INTERVAL", 30*time.Second)
+
+	cfg.Redis.Addr = getEnv("REDIS_ADDR", "localhost:6379")
+	cfg.Redis.Password = getEnv("REDIS_PASSWORD", "")
+	cfg.Redis.DB = getEnvInt("REDIS_DB", 0)
+	cfg.Redis.QueueKey = getEnv("REDIS_QUEUE_KEY", "udp-logger:queue")
+	cfg.Redis.ProcessingKey = getEnv("REDIS_PROCESSING_KEY", "udp-logger:queue:processing")
 
 	cfg.Rabbit.Host = getEnv("RABBITMQ_HOST", "localhost")
 	cfg.Rabbit.Port = getEnvInt("RABBITMQ_PORT", 5672)
@@ -156,6 +173,9 @@ func LoadFromEnv() (Config, error) {
 	}
 	if cfg.SpoolLogInterval < 0 {
 		return Config{}, errors.New("SPOOL_LOG_INTERVAL must be >= 0")
+	}
+	if cfg.QueueBackend != "spool" && cfg.QueueBackend != "redis" {
+		return Config{}, errors.New("QUEUE_BACKEND must be one of: spool, redis")
 	}
 
 	return cfg, nil

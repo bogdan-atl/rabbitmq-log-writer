@@ -18,6 +18,7 @@ import (
 	"rabbit-log-writer/internal/httpserver"
 	"rabbit-log-writer/internal/master"
 	"rabbit-log-writer/internal/metrics"
+	"rabbit-log-writer/internal/queue"
 	"rabbit-log-writer/internal/rabbit"
 	"rabbit-log-writer/internal/spool"
 	"rabbit-log-writer/internal/udp"
@@ -61,18 +62,18 @@ func main() {
 	os.Exit(0)
 }
 
-// Standalone mode: UDP -> Spool -> RabbitMQ (original behavior)
+// Standalone mode: UDP -> Queue -> RabbitMQ (original behavior with selectable backend)
 func runStandaloneMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
-	log.Printf("running in standalone mode: udp=%s rabbit=%s:%d tls=%v",
-		cfg.UDPAddr, cfg.Rabbit.Host, cfg.Rabbit.Port, cfg.Rabbit.TLS.Enabled)
+	log.Printf("running in standalone mode: udp=%s rabbit=%s:%d tls=%v queue_backend=%s",
+		cfg.UDPAddr, cfg.Rabbit.Host, cfg.Rabbit.Port, cfg.Rabbit.TLS.Enabled, cfg.QueueBackend)
 
 	logCh := make(chan string, cfg.BufferSize)
 
-	sp, err := spool.Open(cfg.SpoolDir, cfg.SpoolMaxBytes, cfg.SpoolSegmentBytes, cfg.SpoolFsync)
+	q, err := openQueue(ctx, cfg)
 	if err != nil {
-		log.Fatalf("spool open error: %v", err)
+		log.Fatalf("queue open error: %v", err)
 	}
-	defer func() { _ = sp.Close() }()
+	defer func() { _ = q.Close() }()
 
 	udpSrv := udp.Server{
 		Addr:         cfg.UDPAddr,
@@ -92,9 +93,9 @@ func runStandaloneMode(ctx context.Context, cfg config.Config, m *metrics.Metric
 
 	errCh := make(chan error, 3)
 	go func() { errCh <- udpSrv.Run(ctx) }()
-	go func() { errCh <- runSpooler(ctx, logCh, sp) }()
-	go func() { errCh <- pub.Run(ctx, sp) }()
-	go func() { _ = runSpoolReporter(ctx, sp, m, cfg.SpoolLogInterval) }()
+	go func() { errCh <- runSpooler(ctx, logCh, q) }()
+	go func() { errCh <- pub.Run(ctx, q) }()
+	go func() { _ = runSpoolReporter(ctx, q, m, cfg.SpoolLogInterval) }()
 
 	select {
 	case <-ctx.Done():
@@ -106,18 +107,18 @@ func runStandaloneMode(ctx context.Context, cfg config.Config, m *metrics.Metric
 	}
 }
 
-// Client mode: UDP -> Spool -> TCP Client -> Master
+// Client mode: UDP -> Queue -> TCP Client -> Master
 func runClientMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
-	log.Printf("running in client mode: udp=%s master=%s:%d protocol=%s tls=%v",
-		cfg.UDPAddr, cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort, cfg.Cluster.Protocol, cfg.Cluster.TLS.Enabled)
+	log.Printf("running in client mode: udp=%s master=%s:%d protocol=%s tls=%v queue_backend=%s",
+		cfg.UDPAddr, cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort, cfg.Cluster.Protocol, cfg.Cluster.TLS.Enabled, cfg.QueueBackend)
 
 	logCh := make(chan string, cfg.BufferSize)
 
-	sp, err := spool.Open(cfg.SpoolDir, cfg.SpoolMaxBytes, cfg.SpoolSegmentBytes, cfg.SpoolFsync)
+	q, err := openQueue(ctx, cfg)
 	if err != nil {
-		log.Fatalf("spool open error: %v", err)
+		log.Fatalf("queue open error: %v", err)
 	}
-	defer func() { _ = sp.Close() }()
+	defer func() { _ = q.Close() }()
 
 	udpSrv := udp.Server{
 		Addr:         cfg.UDPAddr,
@@ -133,8 +134,8 @@ func runClientMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 
 	errCh := make(chan error, 3)
 	go func() { errCh <- udpSrv.Run(ctx) }()
-	go func() { errCh <- runSpooler(ctx, logCh, sp) }()
-	go func() { _ = runSpoolReporter(ctx, sp, m, cfg.SpoolLogInterval) }()
+	go func() { errCh <- runSpooler(ctx, logCh, q) }()
+	go func() { _ = runSpoolReporter(ctx, q, m, cfg.SpoolLogInterval) }()
 
 	if protocol == "ws" || protocol == "websocket" {
 		// Use WebSocket client
@@ -171,7 +172,7 @@ func runClientMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 		wsClient := client.WebSocketClient{
 			MasterURL:    masterURL,
 			TLSConfig:    tlsCfg,
-			Spool:        sp,
+			Queue:        q,
 			Metrics:      m,
 			RetryInterval: cfg.PublishRetryInterval,
 		}
@@ -186,7 +187,7 @@ func runClientMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 			MasterAddr:   cfg.Cluster.MasterAddr,
 			MasterPort:   cfg.Cluster.MasterPort,
 			TLSConfig:    tlsCfg,
-			Spool:        sp,
+			Queue:        q,
 			Metrics:      m,
 			RetryInterval: cfg.PublishRetryInterval,
 		}
@@ -209,16 +210,16 @@ func runMasterMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 	if protocol == "" {
 		protocol = "ws" // Default to WebSocket
 	}
-	log.Printf("running in master mode: protocol=%s addr=%s:%d udp=%s rabbit=%s:%d tls=%v",
-		protocol, cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort, cfg.UDPAddr, cfg.Rabbit.Host, cfg.Rabbit.Port, cfg.Rabbit.TLS.Enabled)
+	log.Printf("running in master mode: protocol=%s addr=%s:%d udp=%s rabbit=%s:%d tls=%v queue_backend=%s",
+		protocol, cfg.Cluster.MasterAddr, cfg.Cluster.MasterPort, cfg.UDPAddr, cfg.Rabbit.Host, cfg.Rabbit.Port, cfg.Rabbit.TLS.Enabled, cfg.QueueBackend)
 
 	logCh := make(chan string, cfg.BufferSize)
 
-	sp, err := spool.Open(cfg.SpoolDir, cfg.SpoolMaxBytes, cfg.SpoolSegmentBytes, cfg.SpoolFsync)
+	q, err := openQueue(ctx, cfg)
 	if err != nil {
-		log.Fatalf("spool open error: %v", err)
+		log.Fatalf("queue open error: %v", err)
 	}
-	defer func() { _ = sp.Close() }()
+	defer func() { _ = q.Close() }()
 
 	var masterSrv interface {
 		Run(context.Context) error
@@ -281,9 +282,9 @@ func runMasterMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 	errCh := make(chan error, 4)
 	go func() { errCh <- masterSrv.Run(ctx) }()
 	go func() { errCh <- udpSrv.Run(ctx) }()
-	go func() { errCh <- runSpooler(ctx, logCh, sp) }()
-	go func() { errCh <- pub.Run(ctx, sp) }()
-	go func() { _ = runSpoolReporter(ctx, sp, m, cfg.SpoolLogInterval) }()
+	go func() { errCh <- runSpooler(ctx, logCh, q) }()
+	go func() { errCh <- pub.Run(ctx, q) }()
+	go func() { _ = runSpoolReporter(ctx, q, m, cfg.SpoolLogInterval) }()
 
 	select {
 	case <-ctx.Done():
@@ -295,7 +296,7 @@ func runMasterMode(ctx context.Context, cfg config.Config, m *metrics.Metrics) {
 	}
 }
 
-func runSpooler(ctx context.Context, in <-chan string, s *spool.Spool) error {
+func runSpooler(ctx context.Context, in <-chan string, q queue.Queue) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -304,14 +305,14 @@ func runSpooler(ctx context.Context, in <-chan string, s *spool.Spool) error {
 			if !ok {
 				return nil
 			}
-			if err := s.Enqueue(msg); err != nil {
-				log.Printf("spool enqueue error: %v", err)
+			if err := q.Enqueue(msg); err != nil {
+				log.Printf("queue enqueue error: %v", err)
 			}
 		}
 	}
 }
 
-func runSpoolReporter(ctx context.Context, s *spool.Spool, m *metrics.Metrics, interval time.Duration) error {
+func runSpoolReporter(ctx context.Context, q queue.Queue, m *metrics.Metrics, interval time.Duration) error {
 	tick := 5 * time.Second
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -324,7 +325,7 @@ func runSpoolReporter(ctx context.Context, s *spool.Spool, m *metrics.Metrics, i
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			st := s.Stats()
+			st := q.Stats()
 			if m != nil {
 				m.SpoolQueued.Set(float64(st.Queued))
 				m.SpoolBytes.Set(float64(st.Bytes))
@@ -336,10 +337,28 @@ func runSpoolReporter(ctx context.Context, s *spool.Spool, m *metrics.Metrics, i
 
 			if interval > 0 {
 				if lastLog.IsZero() || time.Since(lastLog) >= interval {
-					log.Printf("spool buffered messages=%d bytes=%d readSeg=%d writeSeg=%d", st.Queued, st.Bytes, st.ReadSeg, st.WriteSeg)
+					log.Printf("queue buffered messages=%d bytes=%d readSeg=%d writeSeg=%d", st.Queued, st.Bytes, st.ReadSeg, st.WriteSeg)
 					lastLog = time.Now()
 				}
 			}
 		}
 	}
+}
+
+func openQueue(ctx context.Context, cfg config.Config) (queue.Queue, error) {
+	if cfg.QueueBackend == "redis" {
+		return queue.NewRedisQueue(
+			ctx,
+			cfg.Redis.Addr,
+			cfg.Redis.Password,
+			cfg.Redis.QueueKey,
+			cfg.Redis.ProcessingKey,
+			cfg.Redis.DB,
+		)
+	}
+	sp, err := spool.Open(cfg.SpoolDir, cfg.SpoolMaxBytes, cfg.SpoolSegmentBytes, cfg.SpoolFsync)
+	if err != nil {
+		return nil, err
+	}
+	return queue.NewSpoolQueue(sp), nil
 }

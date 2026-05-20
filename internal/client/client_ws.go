@@ -10,14 +10,14 @@ import (
 
 	"github.com/gorilla/websocket"
 	"rabbit-log-writer/internal/metrics"
-	"rabbit-log-writer/internal/spool"
+	"rabbit-log-writer/internal/queue"
 )
 
 // WebSocketClient uses WebSocket instead of raw TCP
 type WebSocketClient struct {
 	MasterURL     string      // e.g., "ws://master:9999" or "wss://master:9999"
 	TLSConfig     *tls.Config // TLS config for wss:// connections
-	Spool         *spool.Spool
+	Queue         queue.Queue
 	Metrics       *metrics.Metrics
 	RetryInterval time.Duration
 }
@@ -29,8 +29,8 @@ func (c WebSocketClient) Run(ctx context.Context) error {
 	if c.RetryInterval <= 0 {
 		c.RetryInterval = 5 * time.Second
 	}
-	if c.Spool == nil {
-		return errors.New("client: spool is nil")
+	if c.Queue == nil {
+		return errors.New("client: queue is nil")
 	}
 
 	log.Printf("client: connecting to master at %s", c.MasterURL)
@@ -115,7 +115,7 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 	connCtx, cancelConn := context.WithCancel(ctx)
 	defer cancelConn()
 
-	// Main loop: read all available messages from spool and send them at once
+	// Main loop: read all available messages from queue and send them at once
 	for {
 		select {
 		case <-ctx.Done():
@@ -125,12 +125,12 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 		default:
 		}
 
-		// Collect ALL available messages from spool at once
+		// Collect ALL available messages from queue at once
 		var batch []spoolMessage
 		batchSize := 0
 		maxBatchBytes := 50 * 1024 * 1024 // 50MB max to prevent memory issues
 		
-		// Read messages until spool is empty or we hit size limit
+		// Read messages until queue is empty or we hit size limit
 		// IMPORTANT: We need to ack messages immediately after reading to prevent re-reading
 		for {
 			select {
@@ -143,7 +143,7 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 
 			// Try to read next message with timeout
 			readCtx, cancelRead := context.WithTimeout(connCtx, 100*time.Millisecond)
-			msg, ack, err := c.Spool.Next(readCtx)
+			msg, ack, err := c.Queue.Next(readCtx)
 			cancelRead()
 			
 			if err != nil {
@@ -171,7 +171,7 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 				// Single message too large - skip it (shouldn't happen)
 				log.Printf("client: WARNING: message too large (%d bytes), skipping", msgSize)
 				if ack != nil {
-					ack() // Still ack it to remove from spool
+					ack() // Still ack it to remove from queue
 				}
 				continue
 			}
@@ -180,8 +180,8 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 			// The ack function checks if position hasn't changed, so we must call it right away
 			if ack != nil {
 				if err := ack(); err != nil {
-					log.Printf("client: spool ack error: %v", err)
-					// If ack fails, don't add to batch - message will remain in spool
+					log.Printf("client: queue ack error: %v", err)
+					// If ack fails, don't add to batch - message will remain in queue
 					continue
 				}
 			}
@@ -209,7 +209,7 @@ func (c WebSocketClient) handleConnection(ctx context.Context, conn *websocket.C
 			conn.SetWriteDeadline(time.Now().Add(60 * time.Second))
 			if err := conn.WriteJSON(message); err != nil {
 				log.Printf("client: send batch error: %v (batch size: %d)", err, len(batch))
-				// On error, don't ack - messages will remain in spool for retry
+				// On error, don't ack - messages will remain in queue for retry
 				// Connection will be closed and reconnected
 				return err
 			}
