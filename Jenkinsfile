@@ -13,6 +13,7 @@ pipeline {
         REDIS_CONTAINER = 'udp-logger-ci-redis'
         REDIS_PORT = '6379'
         REDIS_DATA_DIR = '/var/redis'
+        REMOVE_REDIS_ON_FINISH = 'false'
     }
 
     stages {
@@ -94,11 +95,19 @@ pipeline {
     post {
         success {
             sh 'echo "udp-logger-client deployed successfully at $(date)" | logger -t jenkins'
-            sh 'docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true'
+            sh '''
+                if [ "${REMOVE_REDIS_ON_FINISH}" = "true" ]; then
+                    docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true
+                fi
+            '''
         }
         failure {
             sh 'echo "udp-logger-client deployment failed at $(date)" | logger -t jenkins'
-            sh 'docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true'
+            sh '''
+                if [ "${REMOVE_REDIS_ON_FINISH}" = "true" ]; then
+                    docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true
+                fi
+            '''
         }
     }
 }
