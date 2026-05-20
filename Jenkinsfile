@@ -12,6 +12,7 @@ pipeline {
         TARGET_DIR   = '/root/rabbit-log-writer'
         REDIS_CONTAINER = 'udp-logger-ci-redis'
         REDIS_PORT = '6379'
+        REDIS_DATA_DIR = '/var/redis'
     }
 
     stages {
@@ -36,8 +37,12 @@ pipeline {
         stage('Start Redis') {
             steps {
                 sh '''
+                    sudo mkdir -p ${REDIS_DATA_DIR}
                     docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true
-                    docker run -d --name ${REDIS_CONTAINER} -p ${REDIS_PORT}:6379 redis:7-alpine --save "" --appendonly no
+                    docker run -d --name ${REDIS_CONTAINER} \
+                        -p ${REDIS_PORT}:6379 \
+                        -v ${REDIS_DATA_DIR}:/data \
+                        redis:7-alpine --appendonly yes
                     sleep 3
                     docker exec ${REDIS_CONTAINER} redis-cli ping
                 '''
