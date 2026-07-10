@@ -22,6 +22,10 @@ type Metrics struct {
 	SpoolQueued prometheus.Gauge
 	SpoolBytes  prometheus.Gauge
 	SpoolDroppedTotal prometheus.Counter
+	QueueProcessing prometheus.Gauge
+	QueueRequeuedTotal prometheus.Counter
+	QueueDeadLetterTotal prometheus.Counter
+	QueueLastProblemUnix prometheus.Gauge
 
 	MasterClientsConnected prometheus.Gauge
 }
@@ -83,6 +87,26 @@ func New(mode string) *Metrics {
 			Help:        "Total number of messages dropped from spool due to max size (drop-oldest).",
 			ConstLabels: labels,
 		}),
+		QueueProcessing: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name:        "udp_logger_queue_processing",
+			Help:        "Number of messages currently in queue processing state.",
+			ConstLabels: labels,
+		}),
+		QueueRequeuedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name:        "udp_logger_queue_requeued_total",
+			Help:        "Total number of messages requeued from processing back to queue.",
+			ConstLabels: labels,
+		}),
+		QueueDeadLetterTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name:        "udp_logger_queue_dead_letter_total",
+			Help:        "Total number of messages moved to dead-letter queue after retry limit.",
+			ConstLabels: labels,
+		}),
+		QueueLastProblemUnix: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name:        "udp_logger_queue_last_problem_unix",
+			Help:        "Unix timestamp of the most recent processing timeout/retry event.",
+			ConstLabels: labels,
+		}),
 		MasterClientsConnected: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name:        "udp_logger_master_clients_connected",
 			Help:        "Number of clients currently connected to master server.",
@@ -100,6 +124,10 @@ func New(mode string) *Metrics {
 		m.SpoolQueued,
 		m.SpoolBytes,
 		m.SpoolDroppedTotal,
+		m.QueueProcessing,
+		m.QueueRequeuedTotal,
+		m.QueueDeadLetterTotal,
+		m.QueueLastProblemUnix,
 		m.MasterClientsConnected,
 	)
 

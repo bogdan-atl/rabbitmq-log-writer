@@ -318,6 +318,8 @@ func runSpoolReporter(ctx context.Context, q queue.Queue, m *metrics.Metrics, in
 	defer t.Stop()
 
 	var lastDropped int64
+	var lastRequeued int64
+	var lastDeadLetter int64
 	var lastLog time.Time
 
 	for {
@@ -329,9 +331,19 @@ func runSpoolReporter(ctx context.Context, q queue.Queue, m *metrics.Metrics, in
 			if m != nil {
 				m.SpoolQueued.Set(float64(st.Queued))
 				m.SpoolBytes.Set(float64(st.Bytes))
+				m.QueueProcessing.Set(float64(st.Processing))
+				m.QueueLastProblemUnix.Set(float64(st.LastProblemUnix))
 				if st.Dropped > lastDropped {
 					m.SpoolDroppedTotal.Add(float64(st.Dropped - lastDropped))
 					lastDropped = st.Dropped
+				}
+				if st.Requeued > lastRequeued {
+					m.QueueRequeuedTotal.Add(float64(st.Requeued - lastRequeued))
+					lastRequeued = st.Requeued
+				}
+				if st.DeadLetter > lastDeadLetter {
+					m.QueueDeadLetterTotal.Add(float64(st.DeadLetter - lastDeadLetter))
+					lastDeadLetter = st.DeadLetter
 				}
 			}
 
@@ -353,7 +365,11 @@ func openQueue(ctx context.Context, cfg config.Config) (queue.Queue, error) {
 			cfg.Redis.Password,
 			cfg.Redis.QueueKey,
 			cfg.Redis.ProcessingKey,
+			cfg.Redis.DeadLetterKey,
 			cfg.Redis.DB,
+			cfg.Redis.MaxRetries,
+			cfg.Redis.VisibilityTimeout,
+			cfg.Redis.ReaperInterval,
 		)
 	}
 	sp, err := spool.Open(cfg.SpoolDir, cfg.SpoolMaxBytes, cfg.SpoolSegmentBytes, cfg.SpoolFsync)

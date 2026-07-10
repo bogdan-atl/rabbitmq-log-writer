@@ -30,11 +30,15 @@ type Config struct {
 }
 
 type RedisConfig struct {
-	Addr      string
-	Password  string
-	DB        int
-	QueueKey  string
-	ProcessingKey string
+	Addr               string
+	Password           string
+	DB                 int
+	QueueKey           string
+	ProcessingKey      string
+	DeadLetterKey      string
+	MaxRetries         int
+	VisibilityTimeout  time.Duration
+	ReaperInterval     time.Duration
 }
 
 type ClusterConfig struct {
@@ -96,6 +100,10 @@ func LoadFromEnv() (Config, error) {
 	cfg.Redis.DB = getEnvInt("REDIS_DB", 0)
 	cfg.Redis.QueueKey = getEnv("REDIS_QUEUE_KEY", "udp-logger:queue")
 	cfg.Redis.ProcessingKey = getEnv("REDIS_PROCESSING_KEY", "udp-logger:queue:processing")
+	cfg.Redis.DeadLetterKey = getEnv("REDIS_DEAD_LETTER_KEY", "udp-logger:queue:dead-letter")
+	cfg.Redis.MaxRetries = getEnvInt("REDIS_MAX_RETRIES", 10)
+	cfg.Redis.VisibilityTimeout = getEnvDuration("REDIS_VISIBILITY_TIMEOUT", 30*time.Second)
+	cfg.Redis.ReaperInterval = getEnvDuration("REDIS_REAPER_INTERVAL", 5*time.Second)
 
 	cfg.Rabbit.Host = getEnv("RABBITMQ_HOST", "localhost")
 	cfg.Rabbit.Port = getEnvInt("RABBITMQ_PORT", 5672)
@@ -176,6 +184,15 @@ func LoadFromEnv() (Config, error) {
 	}
 	if cfg.QueueBackend != "spool" && cfg.QueueBackend != "redis" {
 		return Config{}, errors.New("QUEUE_BACKEND must be one of: spool, redis")
+	}
+	if cfg.Redis.MaxRetries <= 0 {
+		return Config{}, errors.New("REDIS_MAX_RETRIES must be > 0")
+	}
+	if cfg.Redis.VisibilityTimeout <= 0 {
+		return Config{}, errors.New("REDIS_VISIBILITY_TIMEOUT must be > 0")
+	}
+	if cfg.Redis.ReaperInterval <= 0 {
+		return Config{}, errors.New("REDIS_REAPER_INTERVAL must be > 0")
 	}
 
 	return cfg, nil

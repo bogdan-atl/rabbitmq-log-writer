@@ -60,6 +60,10 @@ Redis (используется только при `QUEUE_BACKEND=redis`):
 - **REDIS_DB**: номер БД Redis, по умолчанию `0`
 - **REDIS_QUEUE_KEY**: ключ списка с неотправленными сообщениями, по умолчанию `udp-logger:queue`
 - **REDIS_PROCESSING_KEY**: ключ списка "в обработке", по умолчанию `udp-logger:queue:processing`
+- **REDIS_DEAD_LETTER_KEY**: ключ списка dead-letter, по умолчанию `udp-logger:queue:dead-letter`
+- **REDIS_MAX_RETRIES**: максимальное число попыток отправки перед dead-letter, по умолчанию `10`
+- **REDIS_VISIBILITY_TIMEOUT**: через сколько сообщение в `processing` считается "зависшим", по умолчанию `30s`
+- **REDIS_REAPER_INTERVAL**: интервал фоновой проверки зависших сообщений, по умолчанию `5s`
 
 RabbitMQ:
 
@@ -165,6 +169,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o udp
 - `udp_logger_spool_queued` - Количество сообщений в очереди spool
 - `udp_logger_spool_bytes` - Размер spool в байтах
 - `udp_logger_spool_dropped_total` - Всего отброшено сообщений из spool
+- `udp_logger_queue_processing` - Количество сообщений в стадии processing (Redis backend)
+- `udp_logger_queue_requeued_total` - Сколько сообщений возвращено из processing обратно в очередь
+- `udp_logger_queue_dead_letter_total` - Сколько сообщений ушло в dead-letter после исчерпания retry
+- `udp_logger_queue_last_problem_unix` - Unix-время последнего инцидента с зависшим processing
 
 ## Примеры конфигурации
 
@@ -190,6 +198,9 @@ export QUEUE_BACKEND="redis"
 export REDIS_ADDR="127.0.0.1:6379"
 export REDIS_PASSWORD=""
 export REDIS_DB="0"
+export REDIS_MAX_RETRIES="10"
+export REDIS_VISIBILITY_TIMEOUT="30s"
+export REDIS_REAPER_INTERVAL="5s"
 go run ./cmd/udp-logger
 ```
 

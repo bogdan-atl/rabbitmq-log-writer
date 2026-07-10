@@ -9,6 +9,10 @@ type Stats struct {
 	WriteSeg   int
 	ReadOffset int64
 	Dropped    int64
+	Processing int64
+	DeadLetter int64
+	Requeued   int64
+	LastProblemUnix int64
 }
 
 type Queue interface {

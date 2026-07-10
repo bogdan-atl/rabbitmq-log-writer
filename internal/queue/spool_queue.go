@@ -31,6 +31,10 @@ func (q *SpoolQueue) Stats() Stats {
 		WriteSeg:   st.WriteSeg,
 		ReadOffset: st.ReadOffset,
 		Dropped:    st.Dropped,
+		Processing: 0,
+		DeadLetter: 0,
+		Requeued:   0,
+		LastProblemUnix: 0,
 	}
 }
 
