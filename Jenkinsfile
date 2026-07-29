@@ -41,6 +41,7 @@ pipeline {
                     sudo mkdir -p ${REDIS_DATA_DIR}
                     docker rm -f ${REDIS_CONTAINER} >/dev/null 2>&1 || true
                     docker run -d --name ${REDIS_CONTAINER} \
+                        --restart unless-stopped \
                         -p ${REDIS_PORT}:6379 \
                         -v ${REDIS_DATA_DIR}:/data \
                         redis:7-alpine --appendonly yes
